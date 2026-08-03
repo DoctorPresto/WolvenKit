@@ -2,10 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using WolvenKit.App.Factories;
+using WolvenKit.App.Helpers;
 using WolvenKit.App.ViewModels.Documents;
 using WolvenKit.App.ViewModels.GraphEditor.Nodes.Quest;
 using WolvenKit.App.ViewModels.GraphEditor.Nodes.Quest.Internal;
 using WolvenKit.App.ViewModels.Shell;
+using WolvenKit.Common.Model;
 using WolvenKit.RED4.Types;
 
 namespace WolvenKit.App.ViewModels.GraphEditor;
@@ -106,9 +108,9 @@ public partial class RedGraph
         return s_questNodeTypes;
     }
 
-    public void CreateQuestNode(Type type, System.Windows.Point point)
+    public uint CreateQuestNode(Type type, System.Windows.Point point, RedTypeTemplateSelectionOption? templateDesc = null)
     {
-        var instance = InternalCreateQuestNode(type);
+        var instance = InternalCreateQuestNode(type, templateDesc);
         var wrappedInstance = WrapQuestNode(instance, true);
         wrappedInstance.Location = point;
 
@@ -119,14 +121,38 @@ public partial class RedGraph
         }
 
         Nodes.Add(wrappedInstance);
+
+        DocumentViewModel?.SetIsDirty(true);
+
+        return wrappedInstance.UniqueId;
     }
 
-    private graphGraphNodeDefinition InternalCreateQuestNode(Type type)
+    private graphGraphNodeDefinition InternalCreateQuestNode(Type type, RedTypeTemplateSelectionOption? templateDesc = null)
     {
-        var instance = System.Activator.CreateInstance(type);
+        IRedType instance;
+        if (templateDesc != null)
+        {
+            instance = _templateService.CreateTypeInstanceFromSelectionOption(templateDesc, type);
+        }
+        else
+        {
+            instance = RedTypeManager.CreateRedType(type);
+        }
+
         if (instance is not graphGraphNodeDefinition questNode)
         {
             throw new Exception();
+        }
+
+        if (templateDesc != null)
+        {
+            foreach (var socket in questNode.Sockets)
+            {
+                if (socket.Chunk is questSocketDefinition socketDefinition)
+                {
+                    socketDefinition.Connections.Clear();
+                }
+            }
         }
 
         if (instance is questNodeDefinition nodeDefinition)
@@ -137,7 +163,8 @@ public partial class RedGraph
             if (nodeDefinition is questFactsDBManagerNodeDefinition factsDBNode)
             {
                 // Initialize the Type property with questSetVar_NodeType (the only implementation)
-                factsDBNode.Type = new CHandle<questIFactsDBManagerNodeType>(new questSetVar_NodeType());
+                factsDBNode.Type ??= new CHandle<questIFactsDBManagerNodeType>();
+                factsDBNode.Type.Chunk ??= new questSetVar_NodeType();
             }
 
             if (nodeDefinition is questInputNodeDefinition inputNode)
@@ -239,6 +266,7 @@ public partial class RedGraph
 
         // 8. Map connections from original node to deletion marker's default sockets
         MapConnectionsToStandardSockets(originalQuestNode, markerWrapper);
+        node.Dispose();
 
         // 9. Update properties in the nodes collection
         if (GetQuestNodesChunkViewModel() is { } nodes)
@@ -384,7 +412,10 @@ public partial class RedGraph
             }
         }
 
-        Nodes.Remove(node);
+        if (Nodes.Remove(node))
+        {
+            node.Dispose();
+        }
     }
 
     private Type GetWrapperType(Type type)
@@ -422,7 +453,7 @@ public partial class RedGraph
             nodeWrapper = tmp;
         }
 
-        if (isNew)
+        if (isNew && node.Sockets.Count == 0)
         {
             nodeWrapper.CreateDefaultSockets();
         }
@@ -1330,7 +1361,7 @@ public partial class RedGraph
             var group = incomingGroupedBySource.First();
             var inputNodeDef = inputNodeDefs.First();
             var phaseInSocket = (QuestInputConnectorViewModel)wrappedPhaseNode.Input.First(s => s.Name == "In");
-            var tempWrappedInput = WrapQuestNode(inputNodeDef, true);
+            using var tempWrappedInput = WrapQuestNode(inputNodeDef, true);
             var internalOutSocket = (QuestOutputConnectorViewModel)tempWrappedInput.Output.First();
 
             ConnectQuest((QuestOutputConnectorViewModel)group.Key, phaseInSocket);
@@ -1347,7 +1378,7 @@ public partial class RedGraph
                 var group = incomingGroupedBySource[i];
                 var inputNodeDef = inputNodeDefs[i];
                 var phaseInSocket = (QuestInputConnectorViewModel)wrappedPhaseNode.Input.First(s => s.Name == inputNodeDef.SocketName);
-                var tempWrappedInput = WrapQuestNode(inputNodeDef, true);
+                using var tempWrappedInput = WrapQuestNode(inputNodeDef, true);
                 var internalOutSocket = (QuestOutputConnectorViewModel)tempWrappedInput.Output.First();
 
                 ConnectQuest((QuestOutputConnectorViewModel)group.Key, phaseInSocket);
@@ -1365,7 +1396,7 @@ public partial class RedGraph
             var group = outgoingGroupedBySource[i];
             var outputNodeDef = outputNodeDefs[i];
             var phaseOutSocket = (QuestOutputConnectorViewModel)wrappedPhaseNode.Output.First(s => s.Name == outputNodeDef.SocketName);
-            var tempWrappedOutput = WrapQuestNode(outputNodeDef, true);
+            using var tempWrappedOutput = WrapQuestNode(outputNodeDef, true);
             var internalInSocket = (QuestInputConnectorViewModel)tempWrappedOutput.Input.First(s => ((QuestInputConnectorViewModel)s).Data.Type == Enums.questSocketType.Input);
 
             AddConnectionToData((QuestOutputConnectorViewModel)group.Key, internalInSocket);
@@ -1381,7 +1412,7 @@ public partial class RedGraph
         {
             var phaseCutDestSocket = (QuestInputConnectorViewModel)wrappedPhaseNode.Input.First(s => s.Name == "CutDestination");
 
-            var tempWrappedInternalCutDest = WrapQuestNode(internalCutDestInputNodeDef!, true);
+            using var tempWrappedInternalCutDest = WrapQuestNode(internalCutDestInputNodeDef!, true);
             var internalCutDestOutSocket = (QuestOutputConnectorViewModel)tempWrappedInternalCutDest.Output.First();
 
             foreach (var conn in cutDestinationConnections)
@@ -1394,6 +1425,10 @@ public partial class RedGraph
 
         // 7. Refresh the whole graph view
         RebuildQuestConnections();
+        foreach (var node in questNodes)
+        {
+            node.Dispose();
+        }
         GraphStateSave();
         DocumentViewModel?.SetIsDirty(true);
     }

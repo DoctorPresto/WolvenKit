@@ -37,13 +37,14 @@ namespace WolvenKit.Views.Documents
         // Navigation memory: tracks which child was last visited from each node in each direction
         private readonly Dictionary<(uint nodeId, Key direction), uint> _navigationMemory = new();
         private readonly List<uint> _navigationHistory = new();
-        
+        private RedGraph? _subscribedGraph;
+
         // Selection persistence across document switches
         private static readonly Dictionary<string, uint> s_documentNodeSelections = new();
         private static AppViewModel? s_globalAppViewModel;
         private static IDocumentViewModel? s_lastActiveDocument;
         private static bool s_selectionManagerInitialized = false;
-        
+
         private bool _disposed = false;
 
         public SceneGraphView()
@@ -51,13 +52,19 @@ namespace WolvenKit.Views.Documents
             InitializeComponent();
             DataContextChanged += OnDataContextChanged;
             Loaded += OnViewLoaded;
+            Unloaded += OnViewUnloaded;
         }
 
         private void OnViewLoaded(object sender, RoutedEventArgs e)
         {
             var viewModel = DataContext as SceneGraphViewModel;
             var document = viewModel?.Parent;
-            
+
+            if (viewModel != null)
+            {
+                SubscribeToGraph(viewModel.MainGraph);
+            }
+
             if (document != null)
             {
                 Dispatcher.BeginInvoke(new Action(() =>
@@ -67,12 +74,15 @@ namespace WolvenKit.Views.Documents
             }
         }
 
+        private void OnViewUnloaded(object sender, RoutedEventArgs e) => UnsubscribeFromGraph();
+
         private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
         {
+            UnsubscribeFromGraph();
+
             if (e.NewValue is not SceneGraphViewModel viewModel) return;
 
-            viewModel.MainGraph.Connections.CollectionChanged += (_, _) => UpdateConnectionPathTypes(viewModel.MainGraph);
-            viewModel.MainGraph.Nodes.CollectionChanged += (_, _) => UpdateConnectionPathTypes(viewModel.MainGraph);
+            SubscribeToGraph(viewModel.MainGraph);
 
             // Initialize centralized selection manager
             InitializeGlobalSelectionManager();
@@ -81,16 +91,49 @@ namespace WolvenKit.Views.Documents
             {
                 SetupConnectionTemplate();
                 UpdateConnectionPathTypes(viewModel.MainGraph);
-                
+
                 // Add a small delay to ensure smooth loading experience
                 Dispatcher.BeginInvoke(new Action(() =>
                 {
                     viewModel.SetGraphLoaded();
-                    
+
                     // Restore selection after graph is loaded
                     RestoreSelectionIfReady(viewModel.Parent);
                 }), System.Windows.Threading.DispatcherPriority.Background);
             }), System.Windows.Threading.DispatcherPriority.Loaded);
+        }
+
+        private void SubscribeToGraph(RedGraph graph)
+        {
+            if (ReferenceEquals(_subscribedGraph, graph))
+            {
+                return;
+            }
+
+            UnsubscribeFromGraph();
+            _subscribedGraph = graph;
+            graph.Connections.CollectionChanged += OnGraphCollectionChanged;
+            graph.Nodes.CollectionChanged += OnGraphCollectionChanged;
+        }
+
+        private void UnsubscribeFromGraph()
+        {
+            if (_subscribedGraph == null)
+            {
+                return;
+            }
+
+            _subscribedGraph.Connections.CollectionChanged -= OnGraphCollectionChanged;
+            _subscribedGraph.Nodes.CollectionChanged -= OnGraphCollectionChanged;
+            _subscribedGraph = null;
+        }
+
+        private void OnGraphCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+        {
+            if (_subscribedGraph != null)
+            {
+                UpdateConnectionPathTypes(_subscribedGraph);
+            }
         }
 
         private void SetupConnectionTemplate()
@@ -202,15 +245,15 @@ namespace WolvenKit.Views.Documents
         /// Smart navigation with memory - cycles through multiple connections in the same direction
         /// </summary>
         private WolvenKit.App.ViewModels.GraphEditor.NodeViewModel FindNextNodeInDirection(
-            RedGraph graph, 
-            WolvenKit.App.ViewModels.GraphEditor.NodeViewModel currentNode, 
+            RedGraph graph,
+            WolvenKit.App.ViewModels.GraphEditor.NodeViewModel currentNode,
             Key direction)
         {
             if (graph?.Nodes == null) return null!;
 
             // Get all connected nodes in the specified direction
             var connectedCandidates = GetConnectedNodesInDirection(graph, currentNode, direction);
-            
+
             if (connectedCandidates.Count > 0)
             {
                 // If we have multiple connected options, use memory to cycle through them
@@ -218,7 +261,7 @@ namespace WolvenKit.Views.Documents
                 {
                     return GetNextNodeWithMemory(currentNode.UniqueId, direction, connectedCandidates);
                 }
-                
+
                 // Single connected option
                 return connectedCandidates[0];
             }
@@ -231,8 +274,8 @@ namespace WolvenKit.Views.Documents
         /// Get connected nodes in the specified direction, sorted by spatial positioning
         /// </summary>
         private List<WolvenKit.App.ViewModels.GraphEditor.NodeViewModel> GetConnectedNodesInDirection(
-            RedGraph graph, 
-            WolvenKit.App.ViewModels.GraphEditor.NodeViewModel currentNode, 
+            RedGraph graph,
+            WolvenKit.App.ViewModels.GraphEditor.NodeViewModel currentNode,
             Key direction)
         {
             var candidates = new List<(WolvenKit.App.ViewModels.GraphEditor.NodeViewModel node, double distance)>();
@@ -276,12 +319,12 @@ namespace WolvenKit.Views.Documents
         /// Use navigation memory to cycle through multiple connected options
         /// </summary>
         private WolvenKit.App.ViewModels.GraphEditor.NodeViewModel GetNextNodeWithMemory(
-            uint currentNodeId, 
-            Key direction, 
+            uint currentNodeId,
+            Key direction,
             List<WolvenKit.App.ViewModels.GraphEditor.NodeViewModel> candidates)
         {
             var memoryKey = (currentNodeId, direction);
-            
+
             // Check if we have memory for this node/direction combination
             if (_navigationMemory.TryGetValue(memoryKey, out var lastVisitedId))
             {
@@ -303,8 +346,8 @@ namespace WolvenKit.Views.Documents
         /// Fallback spatial navigation for unconnected nodes
         /// </summary>
         private WolvenKit.App.ViewModels.GraphEditor.NodeViewModel GetNearestNodeInDirection(
-            RedGraph graph, 
-            WolvenKit.App.ViewModels.GraphEditor.NodeViewModel currentNode, 
+            RedGraph graph,
+            WolvenKit.App.ViewModels.GraphEditor.NodeViewModel currentNode,
             Key direction)
         {
             var candidates = new List<(WolvenKit.App.ViewModels.GraphEditor.NodeViewModel node, double distance)>();
@@ -346,10 +389,10 @@ namespace WolvenKit.Views.Documents
         {
             var memoryKey = (fromNodeId, direction);
             _navigationMemory[memoryKey] = toNodeId;
-            
+
             // Also update navigation history for potential future features
             _navigationHistory.Add(toNodeId);
-            
+
             // Keep history manageable (last 50 moves)
             if (_navigationHistory.Count > 50)
             {
@@ -365,40 +408,40 @@ namespace WolvenKit.Views.Documents
             if (SceneGraphEditor?.Editor == null || graph == null || targetNode == null)
                 return;
 
-            try 
+            try
             {
                 var editor = SceneGraphEditor.Editor;
                 var nodeLocation = targetNode.Location;
                 var currentViewport = editor.ViewportLocation;
                 var viewportSize = editor.ViewportSize;
-                
+
                 // Calculate if node is already reasonably visible
                 var nodeViewportX = nodeLocation.X - currentViewport.X;
                 var nodeViewportY = nodeLocation.Y - currentViewport.Y;
-                
+
                 var margin = 150; // Larger margin to trigger panning earlier
                 var needsPanX = nodeViewportX < margin || nodeViewportX > viewportSize.Width - margin;
                 var needsPanY = nodeViewportY < margin || nodeViewportY > viewportSize.Height - margin;
-                
+
                 if (!needsPanX && !needsPanY)
                     return; // Node is already well visible, no need to pan
-                
+
                 // Calculate target viewport location (center the node more nicely)
                 var targetX = currentViewport.X;
                 var targetY = currentViewport.Y;
-                
+
                 if (needsPanX)
                 {
                     // Center horizontally with slight offset to avoid perfect centering (less jarring)
                     targetX = nodeLocation.X - (viewportSize.Width * 0.4); // 40% from left edge
                 }
-                
+
                 if (needsPanY)
                 {
                     // Center vertically with slight offset
                     targetY = nodeLocation.Y - (viewportSize.Height * 0.4); // 40% from top edge
                 }
-                
+
                 // Smooth animated pan
                 AnimateViewportTo(new Point(targetX, targetY), TimeSpan.FromMilliseconds(300));
             }
@@ -414,37 +457,37 @@ namespace WolvenKit.Views.Documents
         private void AnimateViewportTo(Point targetLocation, TimeSpan duration)
         {
             if (SceneGraphEditor?.Editor == null) return;
-            
+
             var editor = SceneGraphEditor.Editor;
             var startLocation = editor.ViewportLocation;
             var startTime = DateTime.Now;
-            
+
             var timer = new DispatcherTimer
             {
                 Interval = TimeSpan.FromMilliseconds(16)
             };
-            
+
             timer.Tick += (sender, e) =>
             {
                 var elapsed = DateTime.Now - startTime;
                 var progress = Math.Min(elapsed.TotalMilliseconds / duration.TotalMilliseconds, 1.0);
-                
+
                 if (progress >= 1.0)
                 {
                     editor.ViewportLocation = targetLocation;
                     timer.Stop();
                     return;
                 }
-                
+
                 // Smooth easing function (ease-out)
                 var easedProgress = 1 - Math.Pow(1 - progress, 3);
-                
+
                 var currentX = startLocation.X + (targetLocation.X - startLocation.X) * easedProgress;
                 var currentY = startLocation.Y + (targetLocation.Y - startLocation.Y) * easedProgress;
-                
+
                 editor.ViewportLocation = new Point(currentX, currentY);
             };
-            
+
             timer.Start();
         }
 
@@ -525,12 +568,41 @@ namespace WolvenKit.Views.Documents
             if (viewModel?.MainGraph == null)
                 return;
 
+            // Shortcut: C to add a comment at the cursor or around selected nodes
+            if (e.Key == Key.C && Keyboard.Modifiers == ModifierKeys.None)
+            {
+                if (IsEditingContextActive())
+                {
+                    return;
+                }
+
+                if (SceneGraphEditor.AddCommentFromCurrentCursor())
+                {
+                    e.Handled = true;
+                    return;
+                }
+            }
+
             // Shortcut: Delete key to soft delete, Shift+Delete for hard delete
             if (e.Key == Key.Delete)
             {
                 // Don't handle delete key if user is editing text
                 if (IsEditingContextActive())
                     return;
+
+                var selectedComments = SceneGraphEditor?.Editor?.SelectedItems?
+                    .OfType<GraphCommentViewModel>()
+                    .ToList();
+
+                if (selectedComments is { Count: > 0 })
+                {
+                    foreach (var comment in selectedComments)
+                    {
+                        viewModel.MainGraph.RemoveCommentCommand.Execute(comment);
+                    }
+
+                    e.Handled = true;
+                }
 
                 // Use SelectedNodes from underlying GraphEditor
                 var selectedNodes = SceneGraphEditor?.Editor?.SelectedItems?
@@ -614,7 +686,7 @@ namespace WolvenKit.Views.Documents
             // Shortcut: Ctrl+N to open new node dialog
             if (e.Key == Key.N && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
             {
-                OpenNewNodeDialog(viewModel.MainGraph);
+                SceneGraphEditor?.OpenActionPaletteAtViewportCenter();
                 e.Handled = true;
             }
 
@@ -642,7 +714,7 @@ namespace WolvenKit.Views.Documents
                 // Don't handle arrow keys if user is editing text
                 if (IsEditingContextActive())
                     return;
-                
+
                 var currentNode = NodeSelectionService.Instance.SelectedNode;
                 if (currentNode == null)
                     return;
@@ -653,7 +725,7 @@ namespace WolvenKit.Views.Documents
                 {
                     // Update navigation memory
                     UpdateNavigationMemory(currentNode.UniqueId, e.Key, next.UniqueId);
-                    
+
                     // Update selection in editor
                     if (SceneGraphEditor?.Editor != null)
                     {
@@ -661,94 +733,13 @@ namespace WolvenKit.Views.Documents
                         SceneGraphEditor.Editor.SelectedItems?.Add(next);
                     }
                     NodeSelectionService.Instance.SelectedNode = next;
-                    
+
                     // Auto-scroll graph view to keep selected node visible
                     CenterViewOnSelectedNode(viewModel.MainGraph, next);
-                    
+
                     e.Handled = true;
                 }
             }
-        }
-
-        /// <summary>
-        /// Open the new node type selector dialog
-        /// </summary>
-        private async void OpenNewNodeDialog(RedGraph graph)
-        {
-            if (graph?.GraphType != RedGraphType.Scene) return;
-
-            try
-            {
-                var appViewModel = Locator.Current.GetService<AppViewModel>();
-                if (appViewModel == null) return;
-
-                // Get scene node types
-                var sceneNodeTypes = graph.GetSceneNodeTypes();
-                
-                // Separate DynamicSceneGraph from regular scene types (move to end)
-                var regularSceneTypes = sceneNodeTypes.Where(x => x.Name != "DynamicSceneGraphNode").ToList();
-                var dynamicSceneTypes = sceneNodeTypes.Where(x => x.Name == "DynamicSceneGraphNode").ToList();
-                
-                var sceneTypes = regularSceneTypes
-                    .Select(x => new TypeEntry(GraphNodeStyling.GetTitleForNodeType(x), "Scene", x))
-                    .OrderBy(x => x.Name)
-                    .ToList();
-
-                // Get quest node types that can be embedded in scene graphs
-                var questNodeTypes = graph.GetQuestNodeTypesForScene();
-                var questTypes = questNodeTypes
-                    .Select(x => new TypeEntry(GraphNodeStyling.GetTitleForNodeType(x), "Quest", x))
-                    .OrderBy(x => x.Name)
-                    .ToList();
-
-                // Combine both types
-                var allTypes = new List<TypeEntry>();
-                allTypes.AddRange(sceneTypes);
-                allTypes.AddRange(questTypes);
-                
-                // Add DynamicSceneGraph at the end
-                allTypes.AddRange(dynamicSceneTypes
-                    .Select(x => new TypeEntry(GraphNodeStyling.GetTitleForNodeType(x), "Scene", x)));
-
-                // Create and show the type selector dialog
-                await appViewModel.SetActiveDialog(new TypeSelectorDialogViewModel(allTypes)
-                {
-                    DialogHandler = model =>
-                    {
-                        appViewModel.CloseDialogCommand.Execute(null);
-                        if (model is TypeSelectorDialogViewModel { SelectedEntry.UserData: Type selectedType })
-                        {
-                            // Create new node at current viewport center
-                            var viewportCenter = GetViewportCenter();
-                            var nodeId = graph.CreateSceneNode(selectedType, viewportCenter);
-                            SelectNodeById(nodeId);
-                        }
-                    }
-                });
-            }
-            catch (Exception)
-            {
-                // Silently handle any dialog creation errors
-            }
-        }
-
-
-
-        /// <summary>
-        /// Get the center point of the current viewport for placing new nodes
-        /// </summary>
-        private Point GetViewportCenter()
-        {
-            if (SceneGraphEditor?.Editor == null)
-                return new Point(0, 0);
-
-            var viewport = SceneGraphEditor.Editor.ViewportLocation;
-            var size = SceneGraphEditor.Editor.ViewportSize;
-            
-            return new Point(
-                viewport.X + size.Width / 2,
-                viewport.Y + size.Height / 2
-            );
         }
 
         /// <summary>
@@ -766,24 +757,24 @@ namespace WolvenKit.Views.Documents
         private bool IsEditingContextActive()
         {
             var focusedElement = Keyboard.FocusedElement;
-            
+
             // Check for text editing controls
-            if (focusedElement is TextBox or 
-                   RichTextBox or 
+            if (focusedElement is TextBox or
+                   RichTextBox or
                    PasswordBox or
                    System.Windows.Controls.ComboBox { IsEditable: true } or
                    System.Windows.Documents.TextElement)
             {
                 return true;
             }
-            
+
             // Check if timeline control has focus
             if (focusedElement is DependencyObject depObj)
             {
                 var current = depObj;
                 const int maxDepth = 20;
                 var depth = 0;
-                
+
                 while (current != null && depth < maxDepth)
                 {
                     if (current is WolvenKit.Views.Timeline.SectionTimelineView)
@@ -792,7 +783,7 @@ namespace WolvenKit.Views.Documents
                     depth++;
                 }
             }
-            
+
             return false;
         }
 
@@ -811,10 +802,10 @@ namespace WolvenKit.Views.Documents
             {
                 // Clear current selection
                 SceneGraphEditor.Editor.SelectedItems?.Clear();
-                
+
                 // Select the target node
                 SceneGraphEditor.Editor.SelectedItems?.Add(targetNode);
-                
+
                 // Update the NodeSelectionService
                 NodeSelectionService.Instance.SelectedNode = targetNode;
             }
@@ -978,10 +969,10 @@ namespace WolvenKit.Views.Documents
             {
                 SceneGraphEditor.Editor.SelectedItems?.Clear();
                 NodeSelectionService.Instance.SelectedNode = null;
-                
+
                 SceneGraphEditor.Editor.SelectedItems?.Add(targetNode);
                 NodeSelectionService.Instance.SelectedNode = targetNode;
-                
+
                 // Force property change notifications to update property panel
                 if (targetNode is INotifyPropertyChanged notifyPropertyChanged)
                 {
@@ -1009,10 +1000,14 @@ namespace WolvenKit.Views.Documents
             }
 
             _disposed = true;
+            UnsubscribeFromGraph();
+            DataContextChanged -= OnDataContextChanged;
+            Loaded -= OnViewLoaded;
+            Unloaded -= OnViewUnloaded;
         }
 
         #endregion
-        
+
         private void TimelinePanel_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
         {
             if (e.NewValue is false)

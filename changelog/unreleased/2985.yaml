@@ -7,8 +7,8 @@ Template changelog entry:
       description: ""
 
 changes:
-    - type: "fixed"
-      packages: ["App", "CLI", "Nuget Packages"]
-      pr-number: 2955
+    - type: "changed"
+      packages: ["App"]
+      pr-number: 2985
       author: "manavortex"
-      description: "Archive file path being incorrectly read from modlist.txt"
+      description: "Re-named 'add files' to 'generate files'"

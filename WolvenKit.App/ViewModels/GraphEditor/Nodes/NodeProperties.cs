@@ -146,6 +146,12 @@ internal class NodeProperties
                 details["Required Entry Type"] = journalBulkUpdateCasted?.RequiredEntryType.ToString()!;
                 details["Send Notification"] = journalBulkUpdateCasted?.SendNotification == true ? "True" : "False";
             }
+            if (journalNodeCasted?.Type?.Chunk is questJournalChangeMappinPhase_NodeType journalChangeMappinCasted)
+            {
+                details.AddRange(ParseJournalPath(journalChangeMappinCasted?.Path?.Chunk));
+                details["Phase"] = journalChangeMappinCasted?.Phase.ToEnumString()!;
+                details["Notify UI"] = journalChangeMappinCasted?.NotifyUI == true ? "True" : "False";
+            }
         }
         else if (node is questUseWorkspotNodeDefinition useWorkspotNodeCasted)
         {
@@ -268,9 +274,19 @@ internal class NodeProperties
         }
         else if (node is questEventManagerNodeDefinition eventManagerNodeCasted)
         {
-            details["Component Name"] = eventManagerNodeCasted?.ComponentName.ToString()!;
+            var componentName = eventManagerNodeCasted.ComponentName.GetResolvedText();
+            if (!string.IsNullOrEmpty(componentName) && componentName != "None")
+            {
+                details["Component Name"] = componentName;
+            }
+
             details["Event"] = eventManagerNodeCasted?.Event?.Chunk?.GetType()?.Name!;
 
+            if (eventManagerNodeCasted?.Event?.Chunk is QuestExecuteTransition executeTransition)
+            {
+                var transition = executeTransition.Transition;
+                details["Transition"] = $"{transition.GetType().Name} to {transition.TransitionTo.ToEnumString()} ({transition.TransitionMode.ToEnumString()})";
+            }
             if (eventManagerNodeCasted?.Event?.Chunk is DisableBraindanceActions disableBDActionsCasted)
             {
                 details.AddRange(ParseBDMask(disableBDActionsCasted.ActionMask));
@@ -286,10 +302,38 @@ internal class NodeProperties
                 details["- Name"] = gameActionEventCasted?.Name.GetResolvedText()!;
                 details["- Time To Live"] = gameActionEventCasted?.TimeToLive.ToString()!;
             }
+            if (eventManagerNodeCasted?.Event?.Chunk is SetWantedLevel setWantedLevel)
+            {
+                details["Wanted Level"] = setWantedLevel.WantedLevel.ToEnumString();
+
+                var options = new List<string>();
+                if (setWantedLevel.ForceGreyStars)
+                {
+                    options.Add("Force Grey Stars");
+                }
+                if (setWantedLevel.ResetGreyStars)
+                {
+                    options.Add("Reset Grey Stars");
+                }
+                if (setWantedLevel.ForcePlayerPositionAsLastCrimePoint)
+                {
+                    options.Add("Player Position as Last Crime Point");
+                }
+                if (setWantedLevel.ForceIgnoreSecurityAreas)
+                {
+                    options.Add("Ignore Security Areas");
+                }
+
+                details["Wanted Options"] = options.Count == 0 ? "None" : string.Join(", ", options);
+            }
 
             details["Is Object Player"] = eventManagerNodeCasted?.IsObjectPlayer == true ? "True" : "False";
             details["Manager Name"] = eventManagerNodeCasted?.ManagerName.ToString()!;
-            details["Object Ref"] = ParseGameEntityReference(eventManagerNodeCasted?.ObjectRef);
+            var objectRef = ParseGameEntityReference(eventManagerNodeCasted?.ObjectRef);
+            if (objectRef != "-")
+            {
+                details["Object Ref"] = objectRef;
+            }
         }
         else if (node is questEnvironmentManagerNodeDefinition envManagerNodeCasted)
         {
@@ -557,6 +601,20 @@ internal class NodeProperties
                     counter++;
                 }
             }
+            else if (voicesetManagerCasted?.Type?.Chunk is questChangeVoicesetState_NodeType changeVoicesetState)
+            {
+                var param = changeVoicesetState.Params.FirstOrDefault();
+                if (param != null)
+                {
+                    details["Entity"] = ParseGameEntityReference(param.PuppetRef);
+                    details["Player"] = param.IsPlayer ? "True" : "False";
+                    details["Voiceset Lines"] = param.EnableVoicesetLines ? "Enabled" : "Disabled";
+                    details["Voiceset Grunts"] = param.EnableVoicesetGrunts ? "Enabled" : "Disabled";
+                    details["Blocked Inputs"] = param.InputsToBlock.Count == 0
+                        ? "None"
+                        : string.Join(", ", param.InputsToBlock.Select(input => input.Input.GetResolvedText()));
+                }
+            }
         }
         else if (node is questInteractiveObjectManagerNodeDefinition interactiveObjectManagerCasted)
         {
@@ -587,6 +645,18 @@ internal class NodeProperties
                     details["#" + counter + " Slot Name"] = param?.Chunk?.SlotName.ToString()!;
 
                     counter++;
+                }
+            }
+            else if (interactiveObjectManagerCasted?.Type?.Chunk is questElevator_ManageNPCAttachment_NodeType elevatorManager)
+            {
+                var useNumberedLabels = elevatorManager.Params.Count > 1;
+                for (var i = 0; i < elevatorManager.Params.Count; i++)
+                {
+                    var param = elevatorManager.Params[i];
+                    var prefix = useNumberedLabels ? $"#{i + 1} " : "";
+                    details[$"{prefix}Action"] = param.Action.ToEnumString();
+                    details[$"{prefix}Elevator Ref"] = param.ElevatorRef.GetResolvedText()!;
+                    details[$"{prefix}NPC Ref"] = ParseGameEntityReference(param.NpcRef);
                 }
             }
         }
@@ -702,6 +772,53 @@ internal class NodeProperties
                     counter++;
                 }
             }
+            if (itemManagerCasted?.Type?.Chunk is questInjectLoot_NodeType injectLootNodeCasted)
+            {
+                var paramsArr = injectLootNodeCasted.Params;
+
+                int counter = 1;
+                foreach (var param in paramsArr)
+                {
+                    var paramChunk = param?.Chunk;
+                    details["#" + counter + " Object Ref"] = GetNameFromUniversalRef(paramChunk?.ObjectRef?.Chunk);
+
+                    var operations = GetInjectLootOperations(paramChunk);
+                    if (operations.Count > 0)
+                    {
+                        var firstOperation = operations[0];
+                        details["#" + counter + " Operation"] = firstOperation.OperationType.ToEnumString();
+                        details["#" + counter + " Item"] = firstOperation.ItemTDBID.GetResolvedText()!;
+                        details["#" + counter + " Quantity"] = firstOperation.Quantity.ToString()!;
+
+                        if (operations.Count > 1)
+                        {
+                            details["#" + counter + " Operations Count"] = operations.Count.ToString();
+                        }
+                    }
+
+                    counter++;
+                }
+            }
+        }
+        else if (node is questRewardManagerNodeDefinition rewardManagerCasted)
+        {
+            details["Manager"] = GetNameFromClass(rewardManagerCasted?.Type?.Chunk);
+
+            if (rewardManagerCasted?.Type?.Chunk is questGiveReward_NodeType giveRewardNodeCasted)
+            {
+                int counter = 1;
+                foreach (var reward in giveRewardNodeCasted.Rewards)
+                {
+                    var rewardName = reward.GetResolvedText();
+                    if (string.IsNullOrEmpty(rewardName))
+                    {
+                        continue;
+                    }
+
+                    details["#" + counter + " Reward"] = rewardName;
+                    counter++;
+                }
+            }
         }
         else if (node is questCrowdManagerNodeDefinition crowdManagerCasted)
         {
@@ -790,10 +907,70 @@ internal class NodeProperties
         {
             details["Entity Reference"] = ParseGameEntityReference(movePuppetManagerCasted?.EntityReference);
             details["Move Type"] = movePuppetManagerCasted?.MoveType.ToString()!;
+            details["Parameters"] = GetNameFromClass(movePuppetManagerCasted?.NodeParams?.Chunk);
 
             if (movePuppetManagerCasted?.NodeParams?.Chunk is questMoveOnSplineParams splineParams)
             {
                 details["Spline Node Ref"] = splineParams?.SplineNodeRef.GetResolvedText()!;
+            }
+            else if (movePuppetManagerCasted?.NodeParams?.Chunk is questMovePuppetNodeParams moveParams)
+            {
+                details["Movement"] = moveParams.MoveType.ToEnumString();
+
+                if (moveParams.MoveOnSplineParams?.Chunk is questMoveOnSplineParams nestedSplineParams)
+                {
+                    details["Spline Node Ref"] = nestedSplineParams.SplineNodeRef.GetResolvedText()!;
+                }
+                else if (moveParams.MoveToParams?.Chunk is questMoveToParams moveToParams)
+                {
+                    details["Movement Type"] = moveToParams.MovementType.ToEnumString();
+                    details["Movement Target"] = GetNameFromUniversalRef(moveToParams.MovementTargetRef?.Chunk);
+                    details["Facing Target"] = GetNameFromUniversalRef(moveToParams.FacingTargetRef?.Chunk);
+                }
+            }
+        }
+        else if (node is questCombatNodeDefinition combatNode)
+        {
+            details["Entity"] = ParseGameEntityReference(combatNode.EntityReference);
+            details["Command"] = combatNode.Function.GetResolvedText()?.Replace("questCombatNodeParams_", "") ?? "";
+            details["Parameters"] = GetNameFromClass(combatNode.Params?.Chunk);
+
+            switch (combatNode.Params?.Chunk)
+            {
+                case questCombatNodeParams_ShootAt shootAt:
+                    AddCombatTargetDetails(details, shootAt.TargetOverrideNode, shootAt.TargetOverridePuppet);
+                    details["Duration"] = shootAt.Duration.ToString();
+                    details["Once"] = shootAt.Once ? "True" : "False";
+                    break;
+                case questCombatNodeParams_ThrowGrenade throwGrenade:
+                    AddCombatTargetDetails(details, throwGrenade.TargetOverrideNode, throwGrenade.TargetOverridePuppet);
+                    details["Duration"] = throwGrenade.Duration.ToString();
+                    details["Once"] = throwGrenade.Once ? "True" : "False";
+                    break;
+                case questCombatNodeParams_CombatTarget combatTarget:
+                    AddCombatTargetDetails(details, combatTarget.TargetNode, combatTarget.TargetPuppet);
+                    details["Duration"] = combatTarget.Duration.ToString();
+                    break;
+                case questCombatNodeParams_LookAtTarget lookAtTarget:
+                    AddCombatTargetDetails(details, lookAtTarget.TargetNode, lookAtTarget.TargetPuppet);
+                    details["Duration"] = lookAtTarget.Duration.ToString();
+                    break;
+                case questCombatNodeParams_RestrictMovementToArea restrictMovement:
+                    details["Area"] = restrictMovement.Area.GetResolvedText() ?? "";
+                    break;
+                case questCombatNodeParams_SwitchWeapon switchWeapon:
+                    details["Mode"] = switchWeapon.Mode.ToEnumString();
+                    break;
+                case questCombatNodeParams_PrimaryWeapon primaryWeapon:
+                    details["Unequip"] = primaryWeapon.UnEquip ? "True" : "False";
+                    break;
+                case questCombatNodeParams_SecondaryWeapon secondaryWeapon:
+                    details["Unequip"] = secondaryWeapon.UnEquip ? "True" : "False";
+                    break;
+                case questCombatNodeParams_UseCover useCover:
+                    details["Cover"] = useCover.Cover.GetResolvedText() ?? "";
+                    details["One Time Selection"] = useCover.OneTimeSelection ? "True" : "False";
+                    break;
             }
         }
         else if (node is questPhoneManagerNodeDefinition phoneManagerCasted)
@@ -887,6 +1064,21 @@ internal class NodeProperties
 
         // Return true if we found curated properties (more than just the initial "Type")
         return details.Count > initialCount;
+    }
+
+    private static List<questInjectLoot_NodeTypeParams_OperationData> GetInjectLootOperations(questInjectLoot_NodeTypeParams? param)
+    {
+        var operations = new List<questInjectLoot_NodeTypeParams_OperationData>();
+
+        if (param == null)
+        {
+            return operations;
+        }
+
+        operations.AddRange(param.Operations);
+        operations.AddRange(param.LootOperations.Select(x => x?.Chunk).OfType<questInjectLoot_NodeTypeParams_OperationData>());
+
+        return operations;
     }
 
     private static Dictionary<string, string> GetSmartAutoDiscoveredProperties(questNodeDefinition? node)
@@ -1489,6 +1681,24 @@ internal class NodeProperties
         }
 
         return "";
+    }
+
+    private static void AddCombatTargetDetails(
+        Dictionary<string, string> details,
+        NodeRef targetNode,
+        gameEntityReference targetPuppet)
+    {
+        var nodeRef = targetNode.GetResolvedText();
+        if (!string.IsNullOrEmpty(nodeRef))
+        {
+            details["Target Node"] = nodeRef;
+        }
+
+        var puppetRef = ParseGameEntityReference(targetPuppet);
+        if (puppetRef != "-")
+        {
+            details["Target Puppet"] = puppetRef;
+        }
     }
 
     public static string ParseGameEntityReference(gameEntityReference? entRef)

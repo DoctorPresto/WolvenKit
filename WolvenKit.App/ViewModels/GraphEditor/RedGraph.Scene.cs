@@ -2,12 +2,15 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using WolvenKit.App.Helpers;
 using WolvenKit.App.ViewModels.Documents;
+using WolvenKit.App.ViewModels.GraphEditor.Nodes.Quest;
 using WolvenKit.App.ViewModels.GraphEditor.Nodes.Scene;
 using WolvenKit.App.ViewModels.GraphEditor.Nodes.Scene.Internal;
 using WolvenKit.App.ViewModels.Shell;
 using WolvenKit.RED4.Types;
 using WolvenKit.App.Services;
+using WolvenKit.Common.Model;
 using WolvenKit.Core.Extensions;
 using static WolvenKit.RED4.Types.Enums;
 
@@ -34,27 +37,20 @@ public partial class RedGraph
     /// <summary>
     /// Get quest node types that can be embedded in scene graphs via scnQuestNode
     /// </summary>
-    public List<Type> GetQuestNodeTypesForScene()
-    {
-        // Get all quest node types that inherit from questNodeDefinition
-        return AppDomain.CurrentDomain.GetAssemblies()
-            .SelectMany(x => x.GetTypes())
-            .Where(x => typeof(questNodeDefinition).IsAssignableFrom(x) && !x.IsAbstract)
-            .ToList();
-    }
+    public List<Type> GetQuestNodeTypesForScene() => GetQuestNodeTypes();
 
-    public uint CreateSceneNode(Type type, System.Windows.Point point)
+    public uint CreateSceneNode(Type type, System.Windows.Point point, RedTypeTemplateSelectionOption? templateDesc = null)
     {
         scnSceneGraphNode instance;
 
         // Check if this is a quest node type - if so, create a scnQuestNode wrapper
         if (typeof(questNodeDefinition).IsAssignableFrom(type))
         {
-            instance = InternalCreateSceneQuestNode(type);
+            instance = InternalCreateSceneQuestNode(type, templateDesc);
         }
         else
         {
-            instance = InternalCreateSceneNode(type);
+            instance = InternalCreateSceneNode(type, templateDesc);
         }
 
         var wrappedInstance = WrapSceneNode(instance);
@@ -96,16 +92,35 @@ public partial class RedGraph
         return instance.NodeId.Id;
     }
 
-    private scnSceneGraphNode InternalCreateSceneNode(Type type)
+    private scnSceneGraphNode InternalCreateSceneNode(Type type, RedTypeTemplateSelectionOption? templateDesc = null)
     {
-        var instance = System.Activator.CreateInstance(type);
+        IRedType instance;
+        if (templateDesc != null)
+        {
+            instance = _templateService.CreateTypeInstanceFromSelectionOption(templateDesc, type);
+        }
+        else
+        {
+            instance = RedTypeManager.CreateAndInit(type);
+        }
         if (instance is not scnSceneGraphNode sceneNode)
         {
             throw new Exception($"Failed to create scene node of type {type.Name}");
         }
 
+        if (templateDesc != null)
+        {
+            foreach (var outputSocket in sceneNode.OutputSockets)
+            {
+                outputSocket.Destinations.Clear();
+            }
+        }
+
         sceneNode.NodeId = new scnNodeId { Id = ++_currentSceneNodeId };
-        sceneNode.OutputSockets.Add(new scnOutputSocket { Stamp = new scnOutputSocketStamp { Name = 0, Ordinal = 0 } });
+        if (sceneNode.OutputSockets.Count == 0)
+        {
+            sceneNode.OutputSockets.Add(new scnOutputSocket { Stamp = new scnOutputSocketStamp { Name = 0, Ordinal = 0 } });
+        }
 
         if (sceneNode is scnChoiceNode choiceNode)
         {
@@ -221,20 +236,41 @@ public partial class RedGraph
     /// <summary>
     /// Create a scnQuestNode that wraps a quest node type
     /// </summary>
-    private scnQuestNode InternalCreateSceneQuestNode(Type questNodeType)
+    private scnQuestNode InternalCreateSceneQuestNode(Type questNodeType, RedTypeTemplateSelectionOption? templateDesc = null)
     {
         // Create the quest node instance
-        var questInstance = System.Activator.CreateInstance(questNodeType);
+        IRedType questInstance;
+        if (templateDesc != null)
+        {
+            questInstance = _templateService.CreateTypeInstanceFromSelectionOption(templateDesc, questNodeType);
+        }
+        else
+        {
+            questInstance = RedTypeManager.CreateAndInit(questNodeType);
+        }
+
         if (questInstance is not questNodeDefinition questNode)
         {
             throw new Exception($"Failed to create quest node of type {questNodeType.Name}");
+        }
+
+        if (templateDesc != null)
+        {
+            foreach (var socket in questNode.Sockets)
+            {
+                if (socket.Chunk is questSocketDefinition socketDefinition)
+                {
+                    socketDefinition.Connections.Clear();
+                }
+            }
         }
 
         // Special initialization for certain quest node types
         if (questNode is questFactsDBManagerNodeDefinition factsDBNode)
         {
             // Initialize the Type property with questSetVar_NodeType (the only implementation)
-            factsDBNode.Type = new CHandle<questIFactsDBManagerNodeType>(new questSetVar_NodeType());
+            factsDBNode.Type ??= new CHandle<questIFactsDBManagerNodeType>();
+            factsDBNode.Type.Chunk ??= new questSetVar_NodeType();
         }
 
         // Create the wrapper scene node and get its ID
@@ -272,6 +308,16 @@ public partial class RedGraph
                 sceneQuestNode.OsockMappings.Add("False");
                 sceneQuestNode.OutputSockets.Add(new scnOutputSocket { Stamp = new scnOutputSocketStamp { Name = 0, Ordinal = 0 } });
                 sceneQuestNode.OutputSockets.Add(new scnOutputSocket { Stamp = new scnOutputSocketStamp { Name = 0, Ordinal = 1 } });
+                break;
+            case questUseWorkspotNodeDefinition useWorkspotNode:
+                sceneQuestNode.OsockMappings.Add("Success");
+                sceneQuestNode.OutputSockets.Add(new scnOutputSocket { Stamp = new scnOutputSocketStamp { Name = 0, Ordinal = 0 } });
+
+                if (questUseWorkspotNodeDefinitionWrapper.RequiresWorkStartedSocket(useWorkspotNode))
+                {
+                    sceneQuestNode.OsockMappings.Add("Work Started");
+                    sceneQuestNode.OutputSockets.Add(new scnOutputSocket { Stamp = new scnOutputSocketStamp { Name = 0, Ordinal = 1 } });
+                }
                 break;
             default:
                 // Default case: single output socket
@@ -525,6 +571,7 @@ public partial class RedGraph
 
         // 10. Remove the original node from UI
         Nodes.Remove(node);
+        node.Dispose();
 
         // 11. Add the deletion marker wrapper to UI
         Nodes.Add(markerWrapper);
@@ -610,7 +657,10 @@ public partial class RedGraph
             }
         }
 
-        Nodes.Remove(node);
+        if (Nodes.Remove(node))
+        {
+            node.Dispose();
+        }
     }
 
     private BaseSceneViewModel WrapSceneNode(scnSceneGraphNode node)

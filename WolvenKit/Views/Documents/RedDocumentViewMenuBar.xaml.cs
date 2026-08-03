@@ -153,7 +153,10 @@ namespace WolvenKit.Views.Documents
                 [
                     "File validation script not found!",
                     "Try deleting '%APPDATA%\\REDModding\\WolvenKit\\Scripts\\Wolvenkit_FileValidation.wscript',",
-                    "then restart Wolvenkit. If that does not help, please get in touch with the devs."
+                    "then restart Wolvenkit. If that does not help, make sure that Wolvenkit is installed in a location ",
+                    "that is not restricted by windows (e.g. 'C:\\CyberpunkModding\\WolvenKit')",
+                    "If that doesn't help either, please get in touch with the devs!"
+
                 ];
                 throw new WolvenKitException(0x5002, string.Join('\n', exceptionMsg));
             }
@@ -312,13 +315,21 @@ namespace WolvenKit.Views.Documents
                 return;
             }
 
+
             var otherMeshFiles =
                 _documentTools.CollectProjectFiles(".mesh")
-                    .Where(f => !currentPath.EndsWith(f))
-                    .Distinct()
+                    .Where(f => !currentPath.EndsWith(f, StringComparison.OrdinalIgnoreCase))
                     .ToList();
 
-            if (Interactions.ShowCopyMeshAppearancesDialogue(otherMeshFiles) is not { } dialog)
+            var filterDefaultValue = string.Empty;
+            if (Path.GetDirectoryName(project.GetRelativePath(currentPath)) is string parentFolder &&
+                otherMeshFiles.Any(f => f.Contains(parentFolder)))
+            {
+                filterDefaultValue = parentFolder;
+            }
+
+
+            if (Interactions.ShowCopyMeshAppearancesDialogue((otherMeshFiles, filterDefaultValue)) is not { } dialog)
             {
                 return;
             }
@@ -375,8 +386,7 @@ namespace WolvenKit.Views.Documents
 
             var otherMeshFiles =
                 _documentTools.CollectProjectFiles(".mesh")
-                    .Where(f => !currentPath.EndsWith(f))
-                    .Distinct()
+                    .Where(f => !currentPath.EndsWith(f, StringComparison.OrdinalIgnoreCase))
                     .ToDictionary(x => x, x => false);
 
             if (otherMeshFiles.Count == 0)

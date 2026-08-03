@@ -1,7 +1,11 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using WolvenKit.App.ViewModels.Controls;
+using WolvenKit.Common.Services;
+using WolvenKit.Core.Interfaces;
 using WolvenKit.RED4.Types;
 
 namespace WolvenKit.App.ViewModels.Dialogs;
@@ -28,10 +32,15 @@ public partial class TypeSelectorDialogViewModel : DialogViewModel
     [NotifyCanExecuteChangedFor(nameof(OkCommand))]
     private int _selectedMode;
 
-    public TypeSelectorDialogViewModel(List<TypeEntry> entries, bool allowCreating = false)
+    [ObservableProperty]
+    private RedTypeTemplateDropdownViewModel _redTypeTemplateDropdownViewModel;
+
+    public TypeSelectorDialogViewModel(RedTypeTemplateService redTypeTemplateService, ILoggerService loggerService, List<TypeEntry> entries, bool allowCreating = false)
     {
         _entries = new ObservableCollection<TypeEntry>(entries);
         _allowCreating = allowCreating;
+
+        _redTypeTemplateDropdownViewModel = new RedTypeTemplateDropdownViewModel(redTypeTemplateService, loggerService);
     }
 
     private bool CanExecuteOk()
@@ -45,7 +54,7 @@ public partial class TypeSelectorDialogViewModel : DialogViewModel
         {
             return true;
         }
-        
+
         return false;
     }
 
@@ -61,4 +70,14 @@ public partial class TypeSelectorDialogViewModel : DialogViewModel
 
     [RelayCommand]
     private void Cancel() => DialogHandler?.Invoke(null);
+
+    partial void OnSelectedEntryChanged(TypeEntry? value)
+    {
+        if (value is not { UserData: Type type })
+        {
+            return;
+        }
+
+        _redTypeTemplateDropdownViewModel.RequestedType = type;
+    }
 }
