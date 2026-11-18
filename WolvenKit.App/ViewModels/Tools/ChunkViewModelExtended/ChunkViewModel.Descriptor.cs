@@ -131,6 +131,11 @@ public partial class ChunkViewModel
                 Descriptor = $"{startTime}scneventsVFXEvent{effectDetails}";
                 return;
             }
+            case AIActionSpot aiSpot:
+            {
+                Descriptor = $"{aiSpot.Resource.DepotPath.GetResolvedText()}";
+                return;
+            }
             case scneventsVFXDurationEvent vfxDurationEvent:
             {
                 var startTime = $"[{vfxDurationEvent.StartTime}ms] ";
@@ -185,8 +190,8 @@ public partial class ChunkViewModel
             case worldStreamingSectorDescriptor:
                 // handled by default name resolution below
                 break;
-            case worldNodeData sst when Parent?.Parent?.ResolvedData is worldStreamingSector wss && sst.NodeIndex < wss.Nodes.Count:
-                Descriptor = $"[{sst.NodeIndex}] {StringHelper.Stringify(wss.Nodes[sst.NodeIndex].Chunk)}";
+            case worldCompiledNodeInstanceSetupInfo sst when Parent?.Parent?.ResolvedData is worldStreamingSector wss && (int)(ulong)sst.NodeIdx < wss.Nodes.Count:
+                Descriptor = $"[{(int)(ulong)sst.NodeIdx}] {StringHelper.Stringify(wss.Nodes[(int)(ulong)sst.NodeIdx].Chunk)}";
                 return;
             case worldNode worldNode when StringHelper.Stringify(worldNode) is string s && s != string.Empty:
                 Descriptor = s;
@@ -357,6 +362,9 @@ public partial class ChunkViewModel
 
                 break;
             }
+            case workWorkEntryId:
+                Descriptor = "";
+                return;
             case scnWorkspotData_ExternalWorkspotResource externalWorkspotResource:
                 Descriptor = $"{externalWorkspotResource.DataId.Id.ToString()}";
                 return;
@@ -372,6 +380,12 @@ public partial class ChunkViewModel
             case scnWorkspotInstance workspotInstance:
                 Descriptor = $"{workspotInstance.OriginMarker.NodeRef.GetResolvedText()}";
                 return;
+            case workRandomList randomList:
+                Descriptor = $"[{randomList.List.Count}]";
+                break;
+            case workIEntry workIEntry:
+                Descriptor = StringHelper.StringifyOrNull(workIEntry) ?? "";
+                return; // do not fall back to stringification of ID; it's an object
             case scnChoiceNodeOption choiceNodeOption:
                 Descriptor = $"{choiceNodeOption.ScreenplayOptionId.Id}";
                 return;

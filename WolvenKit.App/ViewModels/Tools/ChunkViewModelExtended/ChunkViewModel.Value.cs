@@ -69,6 +69,10 @@ public partial class ChunkViewModel
                 Value = EnumHelper.RedIntToEnumString(DisplayAsEnumType, ri);
             }
         }
+        else if (Data is CUInt64 resourcePathHash && DisplayAsResourcePath)
+        {
+            Value = GetDepotPathValue((ulong)resourcePathHash);
+        }
         else if (PropertyType.IsAssignableTo(typeof(IRedEnum)) && Data is IRedEnum e)
         {
             Value = e.ToEnumString();
@@ -98,7 +102,7 @@ public partial class ChunkViewModel
         }
         else if (PropertyType.IsAssignableTo(typeof(CUInt64)) && Data is CUInt64 uInt64)
         {
-            Value = uInt64 != 0 ? ((NodeRef)(ulong)uInt64).ToString() : ((ulong)uInt64).ToString();
+            Value = StringHelper.StringifyNodeRefHash(uInt64);
         }
         else if (PropertyType.IsAssignableTo(typeof(gamedataLocKeyWrapper)))
         {
@@ -120,18 +124,7 @@ public partial class ChunkViewModel
         }
         else if (PropertyType.IsAssignableTo(typeof(IRedRef)) && Data is IRedRef rr)
         {
-            var depotPath = rr.DepotPath;
-
-            if (depotPath.IsResolvable)
-            {
-                Value = depotPath.GetResolvedText().NotNull();
-            }
-            else
-            {
-                Value = depotPath == ResourcePath.Empty
-                    ? "null"
-                    : $"{(ulong)depotPath}{_hashService.GetGuessedExtension(depotPath)}";
-            }
+            Value = GetDepotPathValue(rr.DepotPath);
         }
         else if (Data is IBrowsableType ibt)
         {
@@ -559,10 +552,10 @@ public partial class ChunkViewModel
 
             #endregion
 
-            case worldNodeData sst when Parent?.Parent?.ResolvedData is worldStreamingSector wss &&
-                                        sst.NodeIndex < wss.Nodes.Count:
-                var node = wss.Nodes[sst.NodeIndex].Chunk;
-                Value = $"#{sst.NodeIndex}";
+            case worldCompiledNodeInstanceSetupInfo sst when Parent?.Parent?.ResolvedData is worldStreamingSector wss &&
+                                                             (int)(ulong)sst.NodeIdx < wss.Nodes.Count:
+                var node = wss.Nodes[(int)(ulong)sst.NodeIdx].Chunk;
+                Value = $"#{(int)(ulong)sst.NodeIdx}";
                 if (node?.GetType().Name is string nodeName && !string.IsNullOrEmpty(nodeName))
                 {
                     Value = $"{Value} => {nodeName}";
@@ -570,6 +563,10 @@ public partial class ChunkViewModel
 
                 IsValueExtrapolated = true;
                 return;
+            case worldAISpotNode {Spot: { Chunk: AIActionSpot aiSpot }} :
+                Value = $"{StringHelper.Stringify(aiSpot.Resource.DepotPath)}";
+                IsValueExtrapolated = true;
+                break;
             case worldNode worldNode:
                 Value = StringHelper.Stringify(worldNode, true);
                 IsValueExtrapolated = Value != string.Empty;
@@ -630,6 +627,19 @@ public partial class ChunkViewModel
                 }
 
                 break;
+            case workExitAnim exitAnim:
+                Value = $"{exitAnim.AnimName.GetResolvedText()}".Trim();
+                IsValueExtrapolated = !string.IsNullOrWhiteSpace(Value);
+                break;
+            case workEntryAnim entryAnim:
+                Value = $"{entryAnim.AnimName.GetResolvedText()}".Trim();
+                IsValueExtrapolated = !string.IsNullOrWhiteSpace(Value);
+                break;
+            case workFastExit fastExit:
+                Value = $"{fastExit.AnimName.GetResolvedText()}".Trim();
+                Value = $"{Value} ({fastExit.MovementType.ToEnumString()})";
+                IsValueExtrapolated = true;
+                break;
             case scnEffectInstanceId scnEffectInstance
                 when Tab?.Parent.Cr2wFile.RootChunk is scnSceneResource sceneForEffect:
                 Value = $"{scnEffectInstance.Id}";
@@ -671,14 +681,55 @@ public partial class ChunkViewModel
                 }
 
                 break;
+            case scnPlaySkAnimRootMotionData { OriginMarker: { } om }:
+                Value = $"{om.NodeRef.GetResolvedText()}".Split("/").Last();
+                IsValueExtrapolated = !string.IsNullOrEmpty(Value);
+                break;
             case scnPlayerActorDef playerActorDef:
                 Value = $"NodeId: {playerActorDef.SpecCharacterRecordId.GetResolvedText()}";
+                IsValueExtrapolated = true;
+                break;
+            case scnPlayerAnimData { TierData: { Chunk: { } td } }:
+                Value = $"{td.Tier}";
+                IsValueExtrapolated = !string.IsNullOrEmpty(Value);
+                break;
+            case scnSceneTime sceneTime:
+                Value = $"{sceneTime.Stu}";
+                IsValueExtrapolated = true;
+                break;
+            case scnfppGenderSpecificParams scnfppGenderSpecificParams:
+                Value = $"GenderMask: {scnfppGenderSpecificParams.GenderMask.Mask}";
                 IsValueExtrapolated = true;
                 break;
             case workWorkEntryId id:
                 Value = $"{id.Id}";
                 IsValueExtrapolated = true;
                 break;
+            case EulerAngles eulerAngles:
+                Value = $"Pitch: {eulerAngles.Pitch}, Roll: {eulerAngles.Roll}, Yaw: {eulerAngles.Yaw}";
+                IsValueExtrapolated = true;
+                break;
+
+            #region workspot
+
+            case workLookAtDrivenTurn lookat:
+                Value = $"Angle: {lookat.TurnAngle}, blend time: {lookat.BlendTime}";
+                IsValueExtrapolated = true;
+                break;
+            case workSequence workSequence:
+                Value = StringHelper.Stringify(workSequence.List);
+                IsValueExtrapolated = true;
+                break;
+            case workRandomList randomList:
+                Value = StringHelper.Stringify(randomList.List);
+                IsValueExtrapolated = true;
+                break;
+            case IRedArray<IRedHandle<workIEntry>> workEntryList:
+                Value = StringHelper.Stringify(workEntryList);
+                IsValueExtrapolated = !string.IsNullOrEmpty(Value);
+                break;
+
+            #endregion
             case CArray<entSlot> entSlots:
                 var entSlotDescriptors = entSlots
                     .Select(slotsOption => slotsOption.SlotName.GetResolvedText() ?? "")
@@ -1245,6 +1296,14 @@ public partial class ChunkViewModel
                 return;
             case scnAnimSetAnimNames animNames when animNames.AnimationNames.Count > 0:
                 Value = $"{StringHelper.Stringify(animNames.AnimationNames)}";
+                IsValueExtrapolated = true;
+                return;
+            case worldGlobalNodeID worldGlobalNodeID:
+                Value = $"{StringHelper.StringifyNodeRefHash(worldGlobalNodeID.Hash)}";
+                IsValueExtrapolated = true;
+                return;
+            case worldCompiledNodeInstanceSetupInfo { GlobalNodeId: { } worldGlobalNodeID }:
+                Value = $"{StringHelper.StringifyNodeRefHash(worldGlobalNodeID.Hash)}";
                 IsValueExtrapolated = true;
                 return;
             case rendRenderTextureBlobMemoryLayout rendTexBlobLayout:

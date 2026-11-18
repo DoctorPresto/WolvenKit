@@ -14,13 +14,14 @@ namespace WolvenKit.RED4.Types
 
 		[Ordinal(2)] 
 		[RED("scenePaths")] 
+		[DisplayAsResourcePath]
 		public CArray<CUInt64> ScenePaths
 		{
 			get => GetPropertyValue<CArray<CUInt64>>();
 			set => SetPropertyValue<CArray<CUInt64>>(value);
 		}
 
-		[Ordinal(4)] 
+		[Ordinal(3)] 
 		[RED("sceneEntries")] 
 		public CArray<animLipsyncMappingSceneEntry> SceneEntries
 		{

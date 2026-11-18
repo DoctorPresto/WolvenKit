@@ -7,6 +7,8 @@ using System.Text.RegularExpressions;
 using System.Windows.Media;
 using DynamicData;
 using WolvenKit.App.Helpers.StringHelpers;
+using WolvenKit.App.Services;
+using WolvenKit.Common.Services;
 using WolvenKit.RED4.Types;
 using static WolvenKit.RED4.Types.Enums;
 
@@ -108,6 +110,52 @@ public abstract partial class StringHelper
         }
 
         return $"[{sb}]";
+    }
+
+    public static string? Stringify(IRedArray<IRedHandle<workAnimClip>> workAnims)
+    {
+        StringBuilder sb = new();
+        foreach (var workAnimClip in workAnims.Select(w => w.GetValue()).OfType<workAnimClip>())
+        {
+            if (sb.Length > 0)
+            {
+                sb.Append(", ");
+            }
+
+            sb.Append(StringifyOrNull(workAnimClip.AnimName) ?? "-");
+        }
+
+        return $"[{sb}]";
+    }
+
+    public static string? StringifyOrNull(workIEntry iEntry)
+    {
+        return iEntry switch
+        {
+            workAnimClip workEntry => StringifyOrNull(workEntry.AnimName),
+            workEntryAnim entryAnim => StringifyOrNull(entryAnim.AnimName),
+            workExitAnim exitAnim => StringifyOrNull(exitAnim.AnimName),
+            workFastExit fastExit => StringifyOrNull(fastExit.AnimName),
+            workReactionSequence reactionSequence => StringifyOrNull(reactionSequence.EmotionalExpression) ??
+                                                     StringifyOrNull(reactionSequence.IdleAnim),
+            workIContainerEntry containerEntry => StringifyOrNull(containerEntry.IdleAnim),
+            workLookAtDrivenTurn lookAtDrivenTurn => StringifyOrNull(lookAtDrivenTurn.TurnAnimName),
+            workPauseClip pauseClip => $"Pause, min: {pauseClip.TimeMin}, max: {pauseClip.TimeMax}",
+            workTagNode tagNode => StringifyOrNull(tagNode.Tag),
+            _ => null
+        };
+    }
+
+    public static string? Stringify(IRedArray<IRedHandle<workIEntry>> workEntries)
+    {
+        return Stringify(workEntries.Select(w => w.GetValue()).OfType<workIEntry>()
+            .Select(wE => StringifyOrNull(wE) ?? "-").ToList(), false, true);
+    }
+
+    public static string? Stringify(CArray<CHandle<workIEntry>> workEntries)
+    {
+        return Stringify(workEntries.Select(w => w.GetValue()).OfType<workIEntry>()
+            .Select(wE => StringifyOrNull(wE) ?? "-").ToList(), false, true);
     }
 
     public static string? Stringify(IRedArray<gameJournalFolderEntry> gameJournalFolderEntries)
@@ -425,20 +473,30 @@ public abstract partial class StringHelper
         return s;
     }
 
-    public static string Stringify(IList<string> list, bool useTab = false)
+    public static string Stringify(IList<string> list, bool useTab = false, bool appendBrackets = false)
     {
         if (list.Count == 0)
         {
             return "";
         }
 
+        var ret = "";
         if (list.Count == 1)
         {
-            return list.FirstOrDefault() ?? "list[0]";
+            ret = list.FirstOrDefault() ?? "list[0]";
+        }
+        else
+        {
+            var indent = useTab ? "\n\t" : ", ";
+            ret = $"{indent}{string.Join(indent, list)}";
         }
 
-        var indent = useTab ? "\n\t" : ", ";
-        return $"{indent}{string.Join(indent, list)}";
+        if (!appendBrackets)
+        {
+            return ret;
+        }
+
+        return $"[{ret}]";
     }
 
 
@@ -487,4 +545,6 @@ public abstract partial class StringHelper
     }
 
     public static bool IsNoneOrEmpty(string text) => string.IsNullOrEmpty(text) || text == "None";
+
+    public static string? StringifyNodeRefHash(ulong hash) => hash != 0 ? ((NodeRef)hash).ToString() : hash.ToString();
 }
